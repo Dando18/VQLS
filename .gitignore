@@ -1,0 +1,4 @@
+# python project
+*-venv
+*.pyc
+__pycache__
