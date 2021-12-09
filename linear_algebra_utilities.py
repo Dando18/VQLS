@@ -19,7 +19,7 @@ PAULIS = {
     'Z': np.array([[1, 0], [0, -1]], dtype=np.complex128),
     'I': np.array([[1, 0], [ 0, 1]], dtype=np.complex128),
 }
-HADAMARD_UNITARY = (1.0/np.sqrt(2.0)) * np.array([[1,1],[1,-1]], dtype=np.float64)
+HADAMARD_UNITARY = (1/np.sqrt(2.0)) * np.array([[1,1],[1,-1]], dtype=np.float64)
 
 
 def hilbert_schmidt_inner_product(A, B):
@@ -29,13 +29,13 @@ def hilbert_schmidt_inner_product(A, B):
 
 
 def hermitian_pauli_expansion(H):
-    ''' Decomposes a hermitian matrix with 2^l size into the linear combination
-        of Pauli matrices.
+    ''' Decomposes a hermitian matrix with 2^l size into a linear combination of
+        Pauli matrices. Used for computing equation (1) in paper.
         An example output is [0.3, 0.7], [['I', 'I'], ['Z', 'X']]
     Args:
         H: hermitian matrix with axes power of two
     Return:
-        c, A: c is the list of coefficients. A is the list of Puali operators.
+        c, A: c is the list of coefficients. A is the list of Pauli operators.
     '''
     if len(H.shape) != 2 or H.shape[0] != H.shape[1]:
         raise ValueError('input matrix not square')
@@ -46,7 +46,7 @@ def hermitian_pauli_expansion(H):
     if not np.array_equal(H.conj().T, H):
         raise ValueError('input matrix not self-adjoint')
 
-    # c_l and A_l from VQLS paper
+    # c_l and A_l for all l from VQLS paper equation (1)
     c = []
     A = []
 
@@ -67,6 +67,14 @@ def hermitian_pauli_expansion(H):
 
 
 def pauli_expansion_to_str(coeffs, paulis):
+    ''' Formatted string of pauli expansion. Coeffs and Paulis should be in the 
+        format returned by hermitian_pauli_expansion.
+    Args:
+        coeffs: linear combination coefficients.
+        paulis: list of lists of Paulis.
+    Return:
+        formatted string 
+    '''
     return ' + '.join( 
         map(lambda x: '{}*{}'.format(x[0],'⊗'.join(x[1])), zip(coeffs, paulis)) 
     )
@@ -74,5 +82,10 @@ def pauli_expansion_to_str(coeffs, paulis):
 
 def classical_solve(A, b):
     ''' Calls an optimal classical-only algorithm for solving Ax=b.
+    Args:
+        A: matrix, 2d-array-like
+        b: vector: 1d-array like
+    Return:
+        x: vector such that Ax=b
     '''
     return np.linalg.solve(A, b)
