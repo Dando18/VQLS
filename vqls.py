@@ -23,7 +23,7 @@ CONTROLLED_PAULIS = {
 
 class VQLS:
 
-    def __init__(self, A, U, shots=10000):
+    def __init__(self, A, U, shots=10000, sample=False):
         self.coeffs_, self.V_ = hermitian_pauli_expansion(A)
         print('Decomposed input matrix into {}'.format(
                                 pauli_expansion_to_str(self.coeffs_, self.V_)))
@@ -31,6 +31,7 @@ class VQLS:
         self.U_ = U
         self.coeffs_ = np.real(self.coeffs_)
         self.shots_ = shots
+        self.sample_ = sample
 
         self.qubits_ = []
         self.circuit_ = None
@@ -114,12 +115,7 @@ class VQLS:
 
 
     def cb_gate(self, ancilla, qubits):
-        '''
-        for q in qubits:
-            self.circuit_.append(
-                cirq.H.controlled()(ancilla, q), 
-                strategy=cirq.InsertStrategy.NEW_THEN_INLINE
-            )
+        ''' Apply controlled-U.
         '''
         self.circuit_.append(
             cirq.MatrixGate(self.U_).controlled()(ancilla, *qubits),
@@ -153,6 +149,8 @@ class VQLS:
 
 
     def special_hadamard_test(self, V, alpha, qubits, ancilla, reg):
+        '''
+        '''
         self.circuit_.append(cirq.H(ancilla))
 
         self.cv_ansatz_(qubits, alpha, ancilla, reg)
@@ -169,19 +167,16 @@ class VQLS:
 
 
     def C(self, alpha):
-        '''
-        C(alpha) as defined in the paper
+        ''' C(alpha) as defined in the paper. Cost function for input alpha.
         '''
         
         alpha = np.reshape(alpha, (-1, 3))
 
-        den = 0.0
+        psi_inner_product = 0.0
         for i, j in itertools.product(range(len(self.V_)), repeat=2):
             self.circuit_ = cirq.Circuit()
             self.simulator_ = cirq.Simulator()
             self.init_qubits_(5)
-
-            expanded_coeffs = self.coeffs_[i] * self.coeffs_[j]
 
             self.hadamard_test_(
                 [self.V_[i], self.V_[j]],
@@ -189,26 +184,38 @@ class VQLS:
                 self.qubits_[1:4],
                 self.qubits_[0]
             )
-            self.circuit_.append(
-                cirq.measure(self.qubits_[0], key="q0"),
-                strategy=cirq.InsertStrategy.NEW_THEN_INLINE
-            )
 
-            results = self.simulator_.run(self.circuit_, 
-                                          repetitions=self.shots_)
-            counts = results.histogram(key='q0')
+            prob_1_on_q0 = 0.0
+            if self.sample_:
+                self.circuit_.append(
+                    cirq.measure(self.qubits_[0], key="q0"),
+                    strategy=cirq.InsertStrategy.NEW_THEN_INLINE
+                )
 
-            circuit_result = 0.0
-            if 1 in counts:
-                circuit_result = float(counts[1]) / self.shots_ / 10.0
+                results = self.simulator_.run(self.circuit_, 
+                                            repetitions=self.shots_)
+                counts = results.histogram(key='q0')
+
+                if 1 in counts:
+                    prob_1_on_q0 = float(counts[1]) / self.shots_
+            else:
+                result = self.simulator_.simulate(self.circuit_)
+                output_state = np.real(result.state_vector())
+                prob_1_on_q0 = sum(output_state[len(output_state)//2:] ** 2)
             
-            den += expanded_coeffs * (1 - 2*circuit_result)
+            c_l = self.coeffs_[i]
+            c_l_prime = np.conj(self.coeffs_[j])
+            
+            # beta_ll' = Prob(0) - Prob(1) = 1-2*Prob(0)
+            beta_l = 1.0 - 2.0*prob_1_on_q0
 
-        num = 0
+            # see equation 14 in paper
+            psi_inner_product += c_l * c_l_prime * beta_l
+
+        b_psi_squared = 0.0
         for i, j in itertools.product(range(len(self.V_)), repeat=2):
-            expanded_coeffs = self.coeffs_[i] * self.coeffs_[j]
-            beta = 1.0
 
+            gamma_l = 1.0
             for step in range(2):
                 self.circuit_ = cirq.Circuit()
                 self.simulator_ = cirq.Simulator()
@@ -224,30 +231,43 @@ class VQLS:
                         self.V_[j], alpha, self.qubits_[1:4], 
                         self.qubits_[0], self.qubits_
                     )
-                
-                self.circuit_.append(
-                    cirq.measure(self.qubits_[0], key="q0"),
-                    strategy=cirq.InsertStrategy.NEW_THEN_INLINE
-                )
 
-                results = self.simulator_.run(self.circuit_, 
-                                              repetitions=self.shots_)
-                counts = results.histogram(key='q0')
+                prob_1_on_q0 = 0.0
+                if self.sample_:
+                    self.circuit_.append(
+                        cirq.measure(self.qubits_[0], key="q0"),
+                        strategy=cirq.InsertStrategy.NEW_THEN_INLINE
+                    )
 
-                circuit_result = 0.0
-                if 1 in counts:
-                    circuit_result = float(counts[1]) / self.shots_ / 10.0
-                beta *= 1 - 2*circuit_result
+                    results = self.simulator_.run(self.circuit_, 
+                                                repetitions=self.shots_)
+                    counts = results.histogram(key='q0')
 
-            num += beta * expanded_coeffs
+                    if 1 in counts:
+                        prob_1_on_q0 = float(counts[1]) / self.shots_
+                else:
+                    result = self.simulator_.simulate(self.circuit_)
+                    output_state = np.real(result.state_vector())
+                    prob_1_on_q0 = sum(output_state[len(output_state)//2:] ** 2)
+
+                # gamma_ll' = Prob(0) - Prob(1) = 1-2*Prob(0)
+                gamma_l *= 1.0 - 2.0*prob_1_on_q0
+
+            c_l = self.coeffs_[i]
+            c_l_prime = np.conj(self.coeffs_[j])
+
+            # see equation 16 in paper
+            b_psi_squared += c_l * c_l_prime * gamma_l
     
-        C_alpha = 1.0 - float(num)/den
+        # see equations 3-7 in paper
+        C_alpha = 1.0 - float(b_psi_squared)/psi_inner_product
+
         print('cost: {}'.format(C_alpha))
         return C_alpha
 
 
-    def compute_v_of_alpha(self, alpha):
-        ''' Compute V(alpha) as using the ansatz. When called with alpha_star
+    def compute_v_of_alpha(self, alpha, sample=False):
+        ''' Compute V(alpha) using the ansatz. When called with alpha_star
             this will return |x> = x/||x||
         '''
         self.circuit_ = cirq.Circuit()
@@ -256,32 +276,31 @@ class VQLS:
 
         self.v_ansatz_(self.qubits_, alpha)
 
-        results = self.simulator_.simulate(self.circuit_)
-        sv = results.state_vector()
-        print(results)
+        sv = None
+        if sample:
+            self.circuit_.append(
+                cirq.measure(*self.qubits_, key='output'), 
+                strategy=cirq.InsertStrategy.NEW_THEN_INLINE
+            )
 
-        self.circuit_ = cirq.Circuit()
-        self.simulator_ = cirq.Simulator()
-        self.init_qubits_(3)
+            results = self.simulator_.run(self.circuit_, repetitions=self.shots_)
+            hist = results.histogram(key='output')
+            total = sum(hist.values())
 
-        self.v_ansatz_(self.qubits_, alpha)
-        self.circuit_.append(
-            cirq.measure(*self.qubits_, key='output'), 
-            strategy=cirq.InsertStrategy.NEW_THEN_INLINE
-        )
+            bases = []
+            amplitudes = []
+            for x in sorted(hist):
+                phase = np.sign(hist[x]) * np.sqrt( float(hist[x])/total )
+                amplitudes.append(phase)
+                bases.append('{}|{:b}>'.format(phase, x))
 
-        results = self.simulator_.run(self.circuit_, repetitions=self.shots_)
-        #print(results.histogram(key='output'))
+            print(' + '.join(bases))
+            sv = np.array(amplitudes)
 
-        hist = results.histogram(key='output')
-        total = sum(hist.values())
+        else:
 
-        bases = []
-        for x in sorted(hist):
-            phase = np.sign(hist[x]) * np.sqrt( float(hist[x])/total )
-            bases.append('{}|{:b}>'.format(phase, x))
-
-        print(' + '.join(bases))
+            results = self.simulator_.simulate(self.circuit_)
+            sv = results.state_vector()
 
         return sv
 

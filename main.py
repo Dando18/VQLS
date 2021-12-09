@@ -19,6 +19,9 @@ def get_args():
         help='Number of times to collect measurements for each circuit.')
     parser.add_argument('--seed', type=int, default=42,
         help='Random number seed. Helpful for reproducibility.')
+    parser.add_argument('--sample', action='store_true',
+        help='Determine values through many measurements instead of using \
+        simulator provided values')
     parser.add_argument('--max-iter', type=int, default=500,
         help='maximum number of iterations for optimizer.')
     return parser.parse_args()
@@ -27,10 +30,9 @@ def get_args():
 def main():
     args = get_args()
 
-    #A = 0.55*np.kron(PAULIS['I'], np.kron(PAULIS['I'], PAULIS['Z'])) + \
-    #    0.45*np.kron(PAULIS['I'], np.kron(PAULIS['I'], PAULIS['I']))
-
-    A = 0.3 *np.kron(PAULIS['Y'], np.kron(PAULIS['I'], PAULIS['I'])) + \
+    # the A in Ax=B. Can be any hermitian matrix, but I construct it here as the
+    # linear combination of paulis for simplicity.
+    A = 0.3 *np.kron(PAULIS['I'], np.kron(PAULIS['I'], PAULIS['I'])) + \
         0.45*np.kron(PAULIS['I'], np.kron(PAULIS['Z'], PAULIS['I'])) + \
         0.25*np.kron(PAULIS['I'], np.kron(PAULIS['X'], PAULIS['Z']))
 
@@ -42,9 +44,12 @@ def main():
     zero_state[0] = 1
     b = U.dot(zero_state)
 
-    # create VQLS circuit
-    vqls = VQLS(A, U, shots=args.shots)
+    print('Using matrix A with cond(A) = {}'.format(np.linalg.cond(A, p=2)))
 
+    # create VQLS circuit
+    vqls = VQLS(A, U, shots=args.shots, sample=args.sample)
+
+    # run optimizer
     np.random.seed(args.seed)
     x0 = [float(np.random.randint(0,3000))/1000 for i in range(0, 9)]
     result = minimize(vqls.C, x0=x0, method='COBYLA', options={'maxiter': args.max_iter})
@@ -64,9 +69,6 @@ def main():
     classical_cost = b.dot(relative) ** 2
     print('Classical cost: {}'.format(classical_cost))
 
-    # norm diff
-    normalized_diff = np.linalg.norm(classical_x - quantum_x)
-    print('Normalized diff: {}'.format(normalized_diff))
 
 
 if __name__ == '__main__':
