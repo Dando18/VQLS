@@ -18,7 +18,7 @@ from scipy.optimize import minimize
 from vqls import VQLS
 from linear_algebra_utilities import hermitian_pauli_expansion, PAULIS, \
                                      pauli_expansion_to_str, classical_solve, \
-                                     HADAMARD_UNITARY
+                                     HADAMARD_UNITARY, random_hermitian_matrix
 
 
 ''' SciPy available optimizers for minimize.
@@ -36,6 +36,9 @@ def get_args():
         help='Number of times to collect measurements for each circuit.')
     parser.add_argument('--seed', type=int, default=42,
         help='Random number seed. Helpful for reproducibility.')
+    parser.add_argument('--random-input', type=int, nargs='?', const=8,
+        help='If provided, then use a random matrix A. Optionally takes \
+              value N to generate A as NxN matrix.')
     parser.add_argument('--sample', action='store_true',
         help='Determine values through many measurements instead of using \
         simulator provided values.')
@@ -51,14 +54,20 @@ def get_args():
 def main():
     args = get_args()
 
-    # the A in Ax=B. Can be any hermitian matrix, but I construct it here as the
-    # linear combination of paulis for simplicity.
-    A = 0.7 *np.kron(np.kron(PAULIS['I'], np.kron(PAULIS['I'], PAULIS['I'])), PAULIS['I']) + \
-        0.45*np.kron(np.kron(PAULIS['I'], np.kron(PAULIS['Z'], PAULIS['I'])), PAULIS['Z']) + \
-        0.25*np.kron(np.kron(PAULIS['I'], np.kron(PAULIS['X'], PAULIS['Z'])), PAULIS['I'])
+    np.random.seed(args.seed)
+
+    # A is any hermitian matrix
+    if args.random_input:
+        A = random_hermitian_matrix(args.random_input)
+    else:
+        # the A in Ax=B. Can be any hermitian matrix, but I construct it here as
+        # the linear combination of paulis for simplicity.
+        A = 0.7 *np.kron(PAULIS['X'], np.kron(PAULIS['I'], PAULIS['I'])) + \
+            0.15*np.kron(PAULIS['I'], np.kron(PAULIS['Z'], PAULIS['I'])) + \
+            0.15*np.kron(PAULIS['I'], np.kron(PAULIS['X'], PAULIS['Z']))
 
     # the unitary U s.t. |b> = U|0>
-    U = np.kron(np.kron(np.kron(HADAMARD_UNITARY, HADAMARD_UNITARY), HADAMARD_UNITARY), HADAMARD_UNITARY)
+    U = np.kron(np.kron(HADAMARD_UNITARY, HADAMARD_UNITARY), HADAMARD_UNITARY)
 
     # compute b based on U
     zero_state = np.zeros(U.shape[0])
@@ -72,11 +81,11 @@ def main():
                 ansatz_layers=args.ansatz_layers)
 
     # run optimizer
-    np.random.seed(args.seed)
     total_params = args.ansatz_layers*2*(vqls.num_qubits_-1) + vqls.num_qubits_
     alpha_0 = np.random.random(total_params)
     result = minimize(vqls.C, x0=alpha_0, method=args.optimizer, 
         options={'maxiter': args.max_iter})
+    total_iterations = result['nit'] if 'nit' in result else result['nfev']
     final_cost = result['fun']
     alpha_star = vqls.reshape_alpha(result['x'])
 
@@ -85,6 +94,7 @@ def main():
         'successful' if result['success'] else 'failed'))
     print('Final cost: {}'.format(final_cost))
     print('Circuit C(alpha) executions: {}'.format(result['nfev']))
+    print('Optimizer iterations: {}'.format(total_iterations))
     print('Quantum result: {}'.format(result['x']))
 
     # compute V(alpha_star) to get actual answer
@@ -113,6 +123,21 @@ def main():
     print('relative forward error: {}'.format(relative_forward_error))
     print('EMF: {}'.format(emf))
     print('(b.b̂)^2: {}'.format(norm_bhat_sq))
+
+
+
+    import pandas as pd
+    # write iter, cost to exact_cobyla_3.csv
+    df = pd.DataFrame(vqls.costs_, columns=['C(𝛼)'])
+    if not args.sample:
+        rtype = 'exact'
+    elif args.sample and args.noise:
+        rtype = 'sample_noise'
+    else:
+        rtype = 'sample'
+
+    fname = '{}_{}_{}_{}.csv'.format(rtype, args.optimizer.lower(), args.ansatz_layers, total_iterations)
+    df.to_csv(fname, index_label='iteration')
 
 
 if __name__ == '__main__':

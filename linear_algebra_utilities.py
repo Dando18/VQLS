@@ -76,8 +76,21 @@ def pauli_expansion_to_str(coeffs, paulis):
         formatted string 
     '''
     return ' + '.join( 
-        map(lambda x: '{}*{}'.format(x[0],'⊗'.join(x[1])), zip(coeffs, paulis)) 
+        map(lambda x: '({:g})*{}'.format(
+                    x[0], '⊗'.join(x[1])
+                ), 
+                zip(coeffs, paulis)
+            ) 
     )
+
+
+def random_hermitian_matrix(N):
+    ''' Returns a random hermitian NxN matrix.
+    Args:
+        N: axis length of returned matrix
+    '''
+    A = np.random.random((N,N))
+    return A + A.conj().T
 
 
 def classical_solve(A, b):

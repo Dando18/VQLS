@@ -40,7 +40,7 @@ class VQLS:
                     they are determined exactly through Cirq's state_vector.
         '''
         self.coeffs_, self.V_ = hermitian_pauli_expansion(A)
-        print('Decomposed input matrix into {}'.format(
+        print('Decomposed input matrix into A = {}'.format(
                                 pauli_expansion_to_str(self.coeffs_, self.V_)))
         
         self.U_ = U
@@ -54,6 +54,7 @@ class VQLS:
 
         self.qubits_ = []
         self.circuit_ = None
+        self.costs_ = []
 
 
     def init_qubits_(self, n_qubits):
@@ -407,6 +408,7 @@ class VQLS:
     
         # see equations (3-7) in paper
         C_alpha = 1.0 - float(b_psi_squared)/psi_inner_product
+        self.costs_.append(C_alpha)
         return C_alpha
 
 
