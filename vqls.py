@@ -30,7 +30,7 @@ CONTROLLED_PAULIS = {
 
 class VQLS:
 
-    def __init__(self, A, U, shots=10000, sample=False):
+    def __init__(self, A, U, shots=10000, sample=False, ansatz_layers=3):
         ''' Initialize VQLS circuit. Does not execute yet.
         Args:
             A: input matrix. Must have dimensions power of 2.
@@ -50,6 +50,7 @@ class VQLS:
 
         # not including any ancillas
         self.num_qubits_ = int(log2(A.shape[0]))
+        self.ansatz_layers_ = ansatz_layers
 
         self.qubits_ = []
         self.circuit_ = None
@@ -64,6 +65,19 @@ class VQLS:
             cirq.NamedQubit('q{}'.format(idx))
             for idx in range(n_qubits)
         ]
+
+
+    def reshape_alpha(self, alpha):
+        ''' Shape alpha by layer to match the fixed ansatz scheme from figure 3.
+        Args:
+            alpha: flattened input vector alpha
+        Return:
+            alpha: reshaped into (num_layers+1, *)
+        '''
+        alpha_0 = alpha[:self.num_qubits_]
+        params_per_layer = 2 * (self.num_qubits_ - 1)
+        alpha_b = np.reshape(alpha[self.num_qubits_:], (-1, params_per_layer))
+        return [alpha_0, *alpha_b]
 
 
     def __repr__(self):
@@ -82,12 +96,13 @@ class VQLS:
         print(self)
 
 
-    def v_ansatz_(self, qubits, alpha):
+    def v_ansatz_supplemental_(self, qubits, alpha):
         ''' Compute the ansatz for V(alpha). See figure S1 in paper.
         Args:
             qubits: qubits to perform V(alpha) on.
             alpha: parameteres for Ry gates.
         '''
+
         self.circuit_.append([
             cirq.ry(alpha[0][idx])(q)
             for idx, q in enumerate(qubits)
@@ -110,8 +125,7 @@ class VQLS:
         ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
 
     
-    def v_ansatz_tmp_(self, qubits, alpha)classical_cost:
-        num_layers = len(alpha)
+    def v_ansatz_(self, qubits, alpha):
 
         # first do Ry on each qubit
         self.circuit_.append([
@@ -120,9 +134,37 @@ class VQLS:
         ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
 
         # now do each layer
+        for layer_idx in range(self.ansatz_layers_):
+            rots = alpha[layer_idx + 1]
+
+            # CZ on every other pair starting at 0
+            self.circuit_.append([
+                cirq.CZ(qubits[idx], qubits[idx+1])
+                for idx in range(0, len(qubits), 2)
+                if idx != len(qubits)-1
+            ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
+
+            # Ry on each qubit
+            self.circuit_.append([
+                cirq.ry(rots[idx])(q)
+                for idx, q in enumerate(qubits)
+            ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
+            
+            # CZ every other pair starting at 1
+            self.circuit_.append([
+                cirq.CZ(qubits[idx], qubits[idx+1])
+                for idx in range(1, len(qubits), 2)
+                if idx != len(qubits)-1
+            ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
+
+            # Ry on interior qubits only
+            self.circuit_.append([
+                cirq.ry(rots[self.num_qubits_ + idx])(q)
+                for idx, q in enumerate(qubits[1:-1])
+            ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
 
 
-    def cv_ansatz_(self, qubits, alpha, control, available_qubits):
+    def cv_ansatz_supplemental_(self, qubits, alpha, control, available_qubits):
         ''' Compute the controlled ansatz of V(alpha).
         Args:
             qubits: what qubits to act on.
@@ -131,9 +173,9 @@ class VQLS:
             available_qubits: all available qubits in machine
         '''
         self.circuit_.append([
-            cirq.ry(alpha[0][idx]).controlled()(control, q)
-            for idx, q in enumerate(qubits)
-        ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
+                cirq.ry(alpha[0][idx]).controlled()(control, q)
+                for idx, q in enumerate(qubits)
+            ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
 
         self.circuit_.append(cirq.CCX(control, qubits[1], available_qubits[-1]))
         self.circuit_.append(cirq.CZ(qubits[0], available_qubits[-1]))
@@ -144,9 +186,9 @@ class VQLS:
         self.circuit_.append(cirq.CCX(control, qubits[0], available_qubits[-1]))
 
         self.circuit_.append([
-            cirq.ry(alpha[1][idx]).controlled()(control, q)
-            for idx, q in enumerate(qubits)
-        ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
+                cirq.ry(alpha[1][idx]).controlled()(control, q)
+                for idx, q in enumerate(qubits)
+            ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
 
         self.circuit_.append(cirq.CCX(control, qubits[2], available_qubits[-1]))
         self.circuit_.append(cirq.CZ(qubits[1], available_qubits[-1]))
@@ -157,9 +199,55 @@ class VQLS:
         self.circuit_.append(cirq.CCX(control, qubits[0], available_qubits[-1]))
 
         self.circuit_.append([
-            cirq.ry(alpha[2][idx]).controlled()(control, q)
-            for idx, q in enumerate(qubits)
-        ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
+                cirq.ry(alpha[2][idx]).controlled()(control, q)
+                for idx, q in enumerate(qubits)
+            ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
+
+
+    def cv_ansatz_(self, qubits, alpha, control, target):
+
+        # do controlled rotations
+        self.circuit_.append([
+                cirq.ry(alpha[0][idx]).controlled()(control, q)
+                for idx, q in enumerate(qubits)
+            ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
+
+        # control of each layer
+        for layer_idx in range(self.ansatz_layers_):
+            rots = alpha[layer_idx + 1]
+
+            # control of every other cz starting on qubit 0
+            for idx in range(0, self.num_qubits_, 2):
+                if idx == self.num_qubits_-1:
+                    continue
+
+                i, j = idx, idx+1
+                self.circuit_.append(cirq.CCX(control, qubits[j], target))
+                self.circuit_.append(cirq.CZ(qubits[i], target))
+                self.circuit_.append(cirq.CCX(control, qubits[j], target))
+            
+            # controlled rotations
+            self.circuit_.append([
+                    cirq.ry(rots[idx]).controlled()(control, q)
+                    for idx, q in enumerate(qubits)
+                ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
+
+            # control of every other cz starting on qubit 1
+            for idx in range(1, self.num_qubits_, 2):
+                if idx == self.num_qubits_-1:
+                    continue
+
+                i, j = idx, idx+1
+                self.circuit_.append(cirq.CCX(control, qubits[j], target))
+                self.circuit_.append(cirq.CZ(qubits[i], target))
+                self.circuit_.append(cirq.CCX(control, qubits[j], target))
+
+            # controlled rotations
+            self.circuit_.append([
+                    cirq.ry(rots[self.num_qubits_+idx]).controlled()(control, q)
+                    for idx, q in enumerate(qubits[1:-1])
+                ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
+
 
 
     def cb_gate(self, control, qubits):
@@ -210,12 +298,12 @@ class VQLS:
         )
 
 
-    def special_hadamard_test(self, V, alpha, qubits, ancilla, reg):
+    def special_hadamard_test(self, V, alpha, qubits, ancilla, target):
         ''' Hadamard test with cb
         '''
         self.circuit_.append(cirq.H(ancilla))
 
-        self.cv_ansatz_(qubits, alpha, ancilla, reg)
+        self.cv_ansatz_(qubits, alpha, ancilla, target)
 
         for q_idx, pauli in enumerate(V):
             self.circuit_.append(
@@ -229,23 +317,23 @@ class VQLS:
 
 
     def C(self, alpha):
-        ''' C(alpha) as defined in the paper.
+        ''' C(alpha) as defined in the paper. Using C_G global objective.
         Args:
             alpha: complex vector input into cost function.
         '''
         
-        alpha = np.reshape(alpha, (-1, 3))
+        alpha = self.reshape_alpha(alpha)
 
         psi_inner_product = 0.0
         for i, j in itertools.product(range(len(self.V_)), repeat=2):
             self.circuit_ = cirq.Circuit()
             self.simulator_ = cirq.Simulator()
-            self.init_qubits_(5)
+            self.init_qubits_(self.num_qubits_+2)
 
             self.hadamard_test_(
                 [self.V_[i], self.V_[j]],
                 alpha,
-                self.qubits_[1:4],
+                self.qubits_[1:-1],
                 self.qubits_[0]
             )
 
@@ -280,21 +368,15 @@ class VQLS:
         for i, j in itertools.product(range(len(self.V_)), repeat=2):
 
             gamma_l = 1.0
-            for step in range(2):
+            for v_i in [self.V_[i], self.V_[j]]:
                 self.circuit_ = cirq.Circuit()
                 self.simulator_ = cirq.Simulator()
-                self.init_qubits_(5)
+                self.init_qubits_(self.num_qubits_+2)
 
-                if step == 0:
-                    self.special_hadamard_test(
-                        self.V_[i], alpha, self.qubits_[1:4], 
-                        self.qubits_[0], self.qubits_
-                    )
-                elif step == 1:
-                    self.special_hadamard_test(
-                        self.V_[j], alpha, self.qubits_[1:4], 
-                        self.qubits_[0], self.qubits_
-                    )
+                self.special_hadamard_test(
+                    v_i, alpha, self.qubits_[1:-1], 
+                    self.qubits_[0], self.qubits_[-1]
+                )
 
                 prob_1_on_q0 = 0.0
                 if self.sample_:
@@ -334,7 +416,7 @@ class VQLS:
         '''
         self.circuit_ = cirq.Circuit()
         self.simulator_ = cirq.Simulator()
-        self.init_qubits_(3)
+        self.init_qubits_(self.num_qubits_)
 
         self.v_ansatz_(self.qubits_, alpha)
 
@@ -360,7 +442,6 @@ class VQLS:
             sv = np.array(amplitudes)
 
         else:
-
             results = self.simulator_.simulate(self.circuit_)
             sv = results.state_vector()
 

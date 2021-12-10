@@ -59,7 +59,7 @@ def hermitian_pauli_expansion(H):
         Al = reduce(np.kron, map(lambda x: x[1], pauli_list))
         a_ij = normalizer * hilbert_schmidt_inner_product(Al, H)
 
-        if a_ij != 0:
+        if not np.isclose(a_ij, 0):
             c.append( a_ij )
             A.append(names)
 

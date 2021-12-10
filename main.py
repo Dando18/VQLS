@@ -43,6 +43,8 @@ def get_args():
         default='Powell', help='Available optimization algorithms for C(alpha)')
     parser.add_argument('--max-iter', type=int, default=500,
         help='Maximum number of iterations for optimizer.')
+    parser.add_argument('--ansatz-layers', type=int, default=3,
+        help='Number of layers to use in fixed ansatz for V(alpha).')
     return parser.parse_args()
 
 
@@ -51,14 +53,14 @@ def main():
 
     # the A in Ax=B. Can be any hermitian matrix, but I construct it here as the
     # linear combination of paulis for simplicity.
-    A = 0.7 *np.kron(PAULIS['I'], np.kron(PAULIS['I'], PAULIS['I'])) + \
-        0.45*np.kron(PAULIS['I'], np.kron(PAULIS['Z'], PAULIS['I'])) + \
-        0.25*np.kron(PAULIS['I'], np.kron(PAULIS['X'], PAULIS['Z']))
+    A = 0.7 *np.kron(np.kron(PAULIS['I'], np.kron(PAULIS['I'], PAULIS['I'])), PAULIS['I']) + \
+        0.45*np.kron(np.kron(PAULIS['I'], np.kron(PAULIS['Z'], PAULIS['I'])), PAULIS['Z']) + \
+        0.25*np.kron(np.kron(PAULIS['I'], np.kron(PAULIS['X'], PAULIS['Z'])), PAULIS['I'])
 
     # the unitary U s.t. |b> = U|0>
-    U = np.kron(np.kron(HADAMARD_UNITARY, HADAMARD_UNITARY), HADAMARD_UNITARY)
+    U = np.kron(np.kron(np.kron(HADAMARD_UNITARY, HADAMARD_UNITARY), HADAMARD_UNITARY), HADAMARD_UNITARY)
 
-    # construct b based on U
+    # compute b based on U
     zero_state = np.zeros(U.shape[0])
     zero_state[0] = 1
     b = U.dot(zero_state)
@@ -66,15 +68,17 @@ def main():
     print('Using matrix A with 𝜅(A) = {:.4f}'.format(np.linalg.cond(A, p=2)))
 
     # create VQLS circuit
-    vqls = VQLS(A, U, shots=args.shots, sample=args.sample)
+    vqls = VQLS(A, U, shots=args.shots, sample=args.sample, 
+                ansatz_layers=args.ansatz_layers)
 
     # run optimizer
     np.random.seed(args.seed)
-    x0 = np.random.random(9)
-    result = minimize(vqls.C, x0=x0, method=args.optimizer, 
+    total_params = args.ansatz_layers*2*(vqls.num_qubits_-1) + vqls.num_qubits_
+    alpha_0 = np.random.random(total_params)
+    result = minimize(vqls.C, x0=alpha_0, method=args.optimizer, 
         options={'maxiter': args.max_iter})
     final_cost = result['fun']
-    alpha_star = np.reshape(result['x'], (-1, 3))
+    alpha_star = vqls.reshape_alpha(result['x'])
 
     # print out results
     print('Optimization {}.'.format(
@@ -109,7 +113,6 @@ def main():
     print('relative forward error: {}'.format(relative_forward_error))
     print('EMF: {}'.format(emf))
     print('(b.b̂)^2: {}'.format(norm_bhat_sq))
-
 
 
 if __name__ == '__main__':
