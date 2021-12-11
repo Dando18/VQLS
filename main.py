@@ -42,6 +42,8 @@ def get_args():
     parser.add_argument('--sample', action='store_true',
         help='Determine values through many measurements instead of using \
         simulator provided values.')
+    parser.add_argument('--noise', action='store_true',
+        help='simulate the circuit with noise.')
     parser.add_argument('--optimizer', choices=AVAILABLE_OPTIMIZERS,
         default='Powell', help='Available optimization algorithms for C(alpha)')
     parser.add_argument('--max-iter', type=int, default=500,
@@ -63,10 +65,11 @@ def main():
         # the A in Ax=B. Can be any hermitian matrix, but I construct it here as
         # the linear combination of paulis for simplicity.
         A = 0.7 *np.kron(PAULIS['X'], np.kron(PAULIS['I'], PAULIS['I'])) + \
-            0.15*np.kron(PAULIS['I'], np.kron(PAULIS['Z'], PAULIS['I'])) + \
-            0.15*np.kron(PAULIS['I'], np.kron(PAULIS['X'], PAULIS['Z']))
+            0.3 *np.kron(PAULIS['I'], np.kron(PAULIS['Z'], PAULIS['I']))# + \
+            #0.15*np.kron(PAULIS['I'], np.kron(PAULIS['X'], PAULIS['Z']))
 
-    # the unitary U s.t. |b> = U|0>
+
+    # the unitary U s.t. |b> = U|0>.  Here just use H^⊗n as in the paper.
     U = np.kron(np.kron(HADAMARD_UNITARY, HADAMARD_UNITARY), HADAMARD_UNITARY)
 
     # compute b based on U
@@ -77,7 +80,7 @@ def main():
     print('Using matrix A with 𝜅(A) = {:.4f}'.format(np.linalg.cond(A, p=2)))
 
     # create VQLS circuit
-    vqls = VQLS(A, U, shots=args.shots, sample=args.sample, 
+    vqls = VQLS(A, U, shots=args.shots, sample=args.sample, noise=args.noise,
                 ansatz_layers=args.ansatz_layers)
 
     # run optimizer
@@ -95,15 +98,12 @@ def main():
     print('Final cost: {}'.format(final_cost))
     print('Circuit C(alpha) executions: {}'.format(result['nfev']))
     print('Optimizer iterations: {}'.format(total_iterations))
-    print('Quantum result: {}'.format(result['x']))
 
     # compute V(alpha_star) to get actual answer
     quantum_x = vqls.compute_v_of_alpha(alpha_star)
 
     # compute answer classically
     classical_x = classical_solve(A, b)
-    print('Classical result: {}'.format(classical_x))
-
 
     # compute errors cost
     ord = 2
@@ -124,20 +124,6 @@ def main():
     print('EMF: {}'.format(emf))
     print('(b.b̂)^2: {}'.format(norm_bhat_sq))
 
-
-
-    import pandas as pd
-    # write iter, cost to exact_cobyla_3.csv
-    df = pd.DataFrame(vqls.costs_, columns=['C(𝛼)'])
-    if not args.sample:
-        rtype = 'exact'
-    elif args.sample and args.noise:
-        rtype = 'sample_noise'
-    else:
-        rtype = 'sample'
-
-    fname = '{}_{}_{}_{}.csv'.format(rtype, args.optimizer.lower(), args.ansatz_layers, total_iterations)
-    df.to_csv(fname, index_label='iteration')
 
 
 if __name__ == '__main__':

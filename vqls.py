@@ -30,7 +30,8 @@ CONTROLLED_PAULIS = {
 
 class VQLS:
 
-    def __init__(self, A, U, shots=10000, sample=False, ansatz_layers=3):
+    def __init__(self, A, U, shots=10000, sample=False, ansatz_layers=3,
+        noise=False):
         ''' Initialize VQLS circuit. Does not execute yet.
         Args:
             A: input matrix. Must have dimensions power of 2.
@@ -38,6 +39,7 @@ class VQLS:
             shots: number of times to sample measurements. Default 10000.
             sample: If true values are sampled through measurements. Otherwise
                     they are determined exactly through Cirq's state_vector.
+            noise: If true, then add artificial noise to the evaluation.
         '''
         self.coeffs_, self.V_ = hermitian_pauli_expansion(A)
         print('Decomposed input matrix into A = {}'.format(
@@ -47,6 +49,7 @@ class VQLS:
         self.coeffs_ = np.real(self.coeffs_)
         self.shots_ = shots
         self.sample_ = sample
+        self.noise_ = noise
 
         # not including any ancillas
         self.num_qubits_ = int(log2(A.shape[0]))
@@ -66,6 +69,21 @@ class VQLS:
             cirq.NamedQubit('q{}'.format(idx))
             for idx in range(n_qubits)
         ]
+
+
+    def get_noise_model(self, p=0.01):
+        ''' Returns a noise model for simulation. The noise model will add
+            random non-identity Paulis with probability p.
+        Args:
+            p: error probability.
+        Return:
+            noise_model: a new noise model.
+        '''
+        if self.noise_:
+            return cirq.NoiseModel.from_noise_model_like(
+                cirq.depolarize(p=p)
+            )
+        return None
 
 
     def reshape_alpha(self, alpha):
@@ -99,6 +117,9 @@ class VQLS:
 
     def v_ansatz_supplemental_(self, qubits, alpha):
         ''' Compute the ansatz for V(alpha). See figure S1 in paper.
+            This is the 3-qubit ansatz the paper used to implement on an
+            actual quantum architecture. Prefer the more general 'v_ansatz_' 
+            over this one.
         Args:
             qubits: qubits to perform V(alpha) on.
             alpha: parameteres for Ry gates.
@@ -127,7 +148,12 @@ class VQLS:
 
     
     def v_ansatz_(self, qubits, alpha):
-
+        ''' Compute the ansatz for V(alpha). See figure 3 in paper.
+            This is a general ansatz.
+        Args:
+            qubits: qubits to perform V(alpha) on.
+            alpha: parameteres for Ry gates.
+        '''
         # first do Ry on each qubit
         self.circuit_.append([
             cirq.ry(alpha[0][idx])(q)
@@ -165,39 +191,41 @@ class VQLS:
             ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
 
 
-    def cv_ansatz_supplemental_(self, qubits, alpha, control, available_qubits):
-        ''' Compute the controlled ansatz of V(alpha).
+    def cv_ansatz_supplemental_(self, qubits, alpha, control, target):
+        ''' Compute the controlled ansatz of V(alpha). This is the controlled
+            version of the ansatz in Figure S1. It only works on 3 qubits.
+            Prefer the more general 'cv_ansatz_' over this one.
         Args:
             qubits: what qubits to act on.
             alpha: input to V(alpha)
             control: control qubit
-            available_qubits: all available qubits in machine
+            target: target qubit
         '''
         self.circuit_.append([
                 cirq.ry(alpha[0][idx]).controlled()(control, q)
                 for idx, q in enumerate(qubits)
             ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
 
-        self.circuit_.append(cirq.CCX(control, qubits[1], available_qubits[-1]))
-        self.circuit_.append(cirq.CZ(qubits[0], available_qubits[-1]))
-        self.circuit_.append(cirq.CCX(control, qubits[1], available_qubits[-1]))
+        self.circuit_.append(cirq.CCX(control, qubits[1], target))
+        self.circuit_.append(cirq.CZ(qubits[0], target))
+        self.circuit_.append(cirq.CCX(control, qubits[1], target))
 
-        self.circuit_.append(cirq.CCX(control, qubits[0], available_qubits[-1]))
-        self.circuit_.append(cirq.CZ(qubits[2], available_qubits[-1]))
-        self.circuit_.append(cirq.CCX(control, qubits[0], available_qubits[-1]))
+        self.circuit_.append(cirq.CCX(control, qubits[0], target))
+        self.circuit_.append(cirq.CZ(qubits[2], target))
+        self.circuit_.append(cirq.CCX(control, qubits[0], target))
 
         self.circuit_.append([
                 cirq.ry(alpha[1][idx]).controlled()(control, q)
                 for idx, q in enumerate(qubits)
             ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
 
-        self.circuit_.append(cirq.CCX(control, qubits[2], available_qubits[-1]))
-        self.circuit_.append(cirq.CZ(qubits[1], available_qubits[-1]))
-        self.circuit_.append(cirq.CCX(control, qubits[2], available_qubits[-1]))
+        self.circuit_.append(cirq.CCX(control, qubits[2], target))
+        self.circuit_.append(cirq.CZ(qubits[1], target))
+        self.circuit_.append(cirq.CCX(control, qubits[2], target))
 
-        self.circuit_.append(cirq.CCX(control, qubits[0], available_qubits[-1]))
-        self.circuit_.append(cirq.CZ(qubits[2], available_qubits[-1]))
-        self.circuit_.append(cirq.CCX(control, qubits[0], available_qubits[-1]))
+        self.circuit_.append(cirq.CCX(control, qubits[0], target))
+        self.circuit_.append(cirq.CZ(qubits[2], target))
+        self.circuit_.append(cirq.CCX(control, qubits[0], target))
 
         self.circuit_.append([
                 cirq.ry(alpha[2][idx]).controlled()(control, q)
@@ -206,7 +234,14 @@ class VQLS:
 
 
     def cv_ansatz_(self, qubits, alpha, control, target):
-
+        ''' Compute the controlled ansatz of V(alpha). This is the controlled
+            version of the ansatz in Figure 3.
+        Args:
+            qubits: what qubits to act on.
+            alpha: input to V(alpha)
+            control: control qubit
+            target: target qubit
+        '''
         # do controlled rotations
         self.circuit_.append([
                 cirq.ry(alpha[0][idx]).controlled()(control, q)
@@ -250,7 +285,6 @@ class VQLS:
                 ], strategy=cirq.InsertStrategy.NEW_THEN_INLINE)
 
 
-
     def cb_gate(self, control, qubits):
         ''' Apply controlled-U.
         Args:
@@ -263,10 +297,11 @@ class VQLS:
         )
 
 
-    def hadamard_test_(self, A, alpha, qubits, ancilla, compute_im=False):
+    def hadamard_test_(self, A_l, A_l_prime, alpha, qubits, ancilla,
+        compute_im=False):
         ''' Hadamard test. See appendix C and figure 9a in paper.
         Args:
-            A: A_l and A_l' in hadamard test circuit
+            A_l and A_l_prime: A's in hadamard test circuit
             alpha: input to V(alpha)
             qubits: qubits to comput ansatz, A_l, and A_l' on
             ancilla: control of A_l and A_l'
@@ -281,13 +316,13 @@ class VQLS:
 
         self.v_ansatz_(qubits, alpha)
 
-        for q_idx, pauli in enumerate(A[0]):
+        for q_idx, pauli in enumerate(A_l):
             self.circuit_.append(
                 CONTROLLED_PAULIS[pauli](ancilla, qubits[q_idx]),
                 strategy=cirq.InsertStrategy.NEW_THEN_INLINE
             )
 
-        for q_idx, pauli in enumerate(A[1]):
+        for q_idx, pauli in enumerate(A_l_prime):
             self.circuit_.append(
                 CONTROLLED_PAULIS[pauli](ancilla, qubits[q_idx]),
                 strategy=cirq.InsertStrategy.NEW_THEN_INLINE
@@ -299,7 +334,7 @@ class VQLS:
         )
 
 
-    def special_hadamard_test(self, V, alpha, qubits, ancilla, target):
+    def controlled_hadamard_test(self, V, alpha, qubits, ancilla, target):
         ''' Hadamard test with cb
         '''
         self.circuit_.append(cirq.H(ancilla))
@@ -328,11 +363,11 @@ class VQLS:
         psi_inner_product = 0.0
         for i, j in itertools.product(range(len(self.V_)), repeat=2):
             self.circuit_ = cirq.Circuit()
-            self.simulator_ = cirq.Simulator()
+            self.simulator_ = cirq.Simulator(noise=self.get_noise_model())
             self.init_qubits_(self.num_qubits_+2)
 
             self.hadamard_test_(
-                [self.V_[i], self.V_[j]],
+                self.V_[i], self.V_[j],
                 alpha,
                 self.qubits_[1:-1],
                 self.qubits_[0]
@@ -371,10 +406,10 @@ class VQLS:
             gamma_l = 1.0
             for v_i in [self.V_[i], self.V_[j]]:
                 self.circuit_ = cirq.Circuit()
-                self.simulator_ = cirq.Simulator()
+                self.simulator_ = cirq.Simulator(noise=self.get_noise_model())
                 self.init_qubits_(self.num_qubits_+2)
 
-                self.special_hadamard_test(
+                self.controlled_hadamard_test(
                     v_i, alpha, self.qubits_[1:-1], 
                     self.qubits_[0], self.qubits_[-1]
                 )
@@ -417,7 +452,7 @@ class VQLS:
             this will return |x> = x/||x||
         '''
         self.circuit_ = cirq.Circuit()
-        self.simulator_ = cirq.Simulator()
+        self.simulator_ = cirq.Simulator(noise=self.get_noise_model())
         self.init_qubits_(self.num_qubits_)
 
         self.v_ansatz_(self.qubits_, alpha)

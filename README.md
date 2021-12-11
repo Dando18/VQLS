@@ -23,6 +23,7 @@ optional arguments:
   --random-input [RANDOM_INPUT]
                         If provided, then use a random matrix A. Optionally takes value N to generate A as NxN matrix.
   --sample              Determine values through many measurements instead of using simulator provided values.
+  --noise               simulate the circuit with noise.
   --optimizer {Nelder-Mead,Powell,CG,BFGS,Newton-CG,L-BFGS-B,TNC,COBYLA,SLSQP,trust-constr,dogleg,trust-ncg,trust-exact,trust-krylov}
                         Available optimization algorithms for C(alpha)
   --max-iter MAX_ITER   Maximum number of iterations for optimizer.
